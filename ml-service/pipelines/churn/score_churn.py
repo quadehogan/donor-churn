@@ -65,7 +65,7 @@ def main():
                      top_risk_factors, scored_at, model_version)
                 VALUES
                     (:supporter_id, :churn_probability, :risk_tier,
-                     :top_risk_factors::jsonb, :scored_at, :model_version)
+                     CAST(:top_risk_factors AS jsonb), :scored_at, :model_version)
                 ON CONFLICT (supporter_id) DO UPDATE SET
                     churn_probability = EXCLUDED.churn_probability,
                     risk_tier         = EXCLUDED.risk_tier,
