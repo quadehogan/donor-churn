@@ -32,7 +32,7 @@ def main():
     df_raw = pd.read_sql(INFERENCE_QUERY, engine)
     print(f"Supporters to score: {len(df_raw)}")
 
-    supporter_ids = df_raw["supporter_id"].tolist()
+    supporter_ids = df_raw["supporter_id"].astype(int).tolist()
     df = engineer_features(df_raw, engine=engine)
     X = df.drop(columns=["supporter_id"])
 

@@ -1,7 +1,7 @@
 -- Run once in Supabase SQL editor to create the churn scores table.
 
 CREATE TABLE IF NOT EXISTS donor_churn_scores (
-    supporter_id        TEXT PRIMARY KEY REFERENCES supporters(supporter_id),
+    supporter_id        INTEGER PRIMARY KEY REFERENCES supporters(supporter_id),
     churn_probability   FLOAT        NOT NULL,
     risk_tier           TEXT         NOT NULL CHECK (risk_tier IN ('high', 'medium', 'low')),
     top_risk_factors    JSONB,
