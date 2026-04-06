@@ -156,13 +156,15 @@ def engineer_features(df: pd.DataFrame, engine=None) -> pd.DataFrame:
     elif "donation_trend" not in df.columns:
         df["donation_trend"] = 0.0
 
-    # Date conversions
+    # Date conversions — strip timezone so all columns are tz-naive.
+    # created_at is timestamptz (tz-aware), donation_date is a plain date (tz-naive);
+    # normalizing to tz-naive avoids mixed-type subtraction errors.
     for col in ["last_donation_date", "first_donation_date",
                 "first_donation_date_tx", "supporter_since"]:
         if col in df.columns:
-            df[col] = pd.to_datetime(df[col])
+            df[col] = pd.to_datetime(df[col]).dt.tz_localize(None)
 
-    today = pd.Timestamp.today().normalize()
+    today = pd.Timestamp.now().normalize()
     df["recency_days"]     = (today - df["last_donation_date"]).dt.days
     df["tenure_days"]      = (today - df["supporter_since"]).dt.days
     df["active_span_days"] = (
