@@ -1,8 +1,13 @@
 """
 SQL queries and feature engineering for the donor churn pipeline.
 
-TODO: Column names marked with *** need verification against the real Supabase schema.
-      Drop the CSV exports into the repo root and these will be updated to match.
+Schema verified against lighthouse_csv_v7 exports (2026-04-06):
+  supporters: supporter_id, supporter_type, relationship_type, region, country,
+              acquisition_channel, status ('Active'/'Inactive'), created_at,
+              first_donation_date
+  donations:  donation_id, supporter_id, donation_type, donation_date, is_recurring,
+              campaign_name, channel_source, amount (NULL for non-monetary),
+              estimated_value (populated for all types)
 """
 
 import numpy as np
@@ -11,10 +16,10 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 # SQL — Training query (one row per supporter, donations aggregated)
 # ---------------------------------------------------------------------------
-# *** Assumes columns: supporters(supporter_id, supporter_type, relationship_type,
-#     region, country, acquisition_channel, status, created_at, first_donation_date)
-#     donations(donation_id, supporter_id, amount, donation_date, is_recurring,
-#               campaign_name, channel_source)
+# Non-monetary donations (InKind, Skills, SocialMedia, Time) have NULL amount
+# but a populated estimated_value. COALESCE gives a consistent monetary figure
+# across all donation types.
+# Status values in DB are 'Active' / 'Inactive' (PascalCase).
 # ---------------------------------------------------------------------------
 
 TRAINING_QUERY = """
@@ -26,19 +31,19 @@ SELECT
     s.country,
     s.acquisition_channel,
     s.status,
-    s.created_at                                        AS supporter_since,
+    s.created_at                                                        AS supporter_since,
     s.first_donation_date,
 
-    COUNT(d.donation_id)                                AS frequency,
-    SUM(d.amount)                                       AS total_value,
-    AVG(d.amount)                                       AS avg_value,
-    MAX(d.amount)                                       AS max_value,
-    MIN(d.amount)                                       AS min_value,
-    MAX(d.donation_date)                                AS last_donation_date,
-    MIN(d.donation_date)                                AS first_donation_date_tx,
-    MAX(CASE WHEN d.is_recurring THEN 1 ELSE 0 END)    AS ever_recurring,
-    COUNT(DISTINCT d.campaign_name)                     AS num_campaigns,
-    COUNT(DISTINCT d.channel_source)                    AS num_channels,
+    COUNT(d.donation_id)                                                AS frequency,
+    SUM(COALESCE(d.amount, d.estimated_value))                          AS total_value,
+    AVG(COALESCE(d.amount, d.estimated_value))                          AS avg_value,
+    MAX(COALESCE(d.amount, d.estimated_value))                          AS max_value,
+    MIN(COALESCE(d.amount, d.estimated_value))                          AS min_value,
+    MAX(d.donation_date)                                                AS last_donation_date,
+    MIN(d.donation_date)                                                AS first_donation_date_tx,
+    MAX(CASE WHEN d.is_recurring THEN 1 ELSE 0 END)                    AS ever_recurring,
+    COUNT(DISTINCT d.campaign_name)                                     AS num_campaigns,
+    COUNT(DISTINCT d.channel_source)                                    AS num_channels,
 
     CASE
         WHEN MAX(CASE WHEN d.is_recurring THEN 1 ELSE 0 END) = 1
@@ -46,11 +51,11 @@ SELECT
         WHEN MAX(CASE WHEN d.is_recurring THEN 1 ELSE 0 END) = 0
              AND (CURRENT_DATE - MAX(d.donation_date)) > 90  THEN 1
         ELSE 0
-    END                                                 AS churned
+    END                                                                 AS churned
 
 FROM supporters s
 JOIN donations d ON s.supporter_id = d.supporter_id
-WHERE s.status IN ('active', 'lapsed', 'inactive')
+WHERE s.status IN ('Active', 'Inactive')
 GROUP BY
     s.supporter_id, s.supporter_type, s.relationship_type,
     s.region, s.country, s.acquisition_channel,
@@ -72,19 +77,19 @@ SELECT
     s.acquisition_channel,
     s.created_at                                        AS supporter_since,
     s.first_donation_date,
-    COUNT(d.donation_id)                                AS frequency,
-    SUM(d.amount)                                       AS total_value,
-    AVG(d.amount)                                       AS avg_value,
-    MAX(d.amount)                                       AS max_value,
-    MIN(d.amount)                                       AS min_value,
-    MAX(d.donation_date)                                AS last_donation_date,
-    MIN(d.donation_date)                                AS first_donation_date_tx,
-    MAX(CASE WHEN d.is_recurring THEN 1 ELSE 0 END)    AS ever_recurring,
-    COUNT(DISTINCT d.campaign_name)                     AS num_campaigns,
-    COUNT(DISTINCT d.channel_source)                    AS num_channels
+    COUNT(d.donation_id)                                                AS frequency,
+    SUM(COALESCE(d.amount, d.estimated_value))                          AS total_value,
+    AVG(COALESCE(d.amount, d.estimated_value))                          AS avg_value,
+    MAX(COALESCE(d.amount, d.estimated_value))                          AS max_value,
+    MIN(COALESCE(d.amount, d.estimated_value))                          AS min_value,
+    MAX(d.donation_date)                                                AS last_donation_date,
+    MIN(d.donation_date)                                                AS first_donation_date_tx,
+    MAX(CASE WHEN d.is_recurring THEN 1 ELSE 0 END)                    AS ever_recurring,
+    COUNT(DISTINCT d.campaign_name)                                     AS num_campaigns,
+    COUNT(DISTINCT d.channel_source)                                    AS num_channels
 FROM supporters s
 JOIN donations d ON s.supporter_id = d.supporter_id
-WHERE s.status = 'active'
+WHERE s.status = 'Active'
 GROUP BY
     s.supporter_id, s.supporter_type, s.relationship_type,
     s.region, s.country, s.acquisition_channel,
@@ -99,7 +104,10 @@ HAVING COUNT(d.donation_id) >= 2
 TREND_QUERY = """
 SELECT
     supporter_id,
-    REGR_SLOPE(amount, EXTRACT(EPOCH FROM donation_date)) AS donation_trend
+    REGR_SLOPE(
+        COALESCE(amount, estimated_value),
+        EXTRACT(EPOCH FROM donation_date)
+    ) AS donation_trend
 FROM donations
 GROUP BY supporter_id
 """
