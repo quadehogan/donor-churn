@@ -6,6 +6,7 @@ from fastapi.security.api_key import APIKeyHeader
 
 from pipelines.churn import score_churn
 from pipelines.impact_attribution import score_impact
+from pipelines.resident_risk import score_residents
 
 load_dotenv()
 
@@ -43,3 +44,16 @@ def trigger_impact_scoring():
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     return {"status": "impact statements generated", "count_scored": count}
+
+
+@app.post("/score/residents", dependencies=[Depends(verify_key)])
+def trigger_resident_scoring():
+    """
+    Score all active residents. Internal only — never exposed to donor-facing surfaces.
+    Caller must have ML_SERVICE_API_KEY.
+    """
+    try:
+        count = score_residents.main()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"status": "resident scoring complete", "count_scored": count}
