@@ -5,6 +5,7 @@ from fastapi import Depends, FastAPI, HTTPException, Security
 from fastapi.security.api_key import APIKeyHeader
 
 from pipelines.churn import score_churn
+from pipelines.impact_attribution import score_impact
 
 load_dotenv()
 
@@ -32,3 +33,13 @@ def trigger_scoring():
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     return {"status": "scoring complete", "count_scored": count}
+
+
+@app.post("/score/impact", dependencies=[Depends(verify_key)])
+def trigger_impact_scoring():
+    """Regenerate all donor impact statements."""
+    try:
+        count = score_impact.main()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"status": "impact statements generated", "count_scored": count}
