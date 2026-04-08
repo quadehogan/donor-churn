@@ -6,7 +6,9 @@ from fastapi.security.api_key import APIKeyHeader
 
 from pipelines.churn import score_churn
 from pipelines.impact_attribution import score_impact
+from pipelines.interventions import score_interventions
 from pipelines.resident_risk import score_residents
+from pipelines.social_media import score_social_media
 
 load_dotenv()
 
@@ -57,3 +59,26 @@ def trigger_resident_scoring():
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     return {"status": "resident scoring complete", "count_scored": count}
+
+
+@app.post("/score/interventions", dependencies=[Depends(verify_key)])
+def trigger_intervention_scoring():
+    """
+    Generate per-resident intervention recommendations. Internal only — RLS restricted.
+    Caller must have ML_SERVICE_API_KEY.
+    """
+    try:
+        count = score_interventions.main()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"status": "intervention scoring complete", "count_scored": count}
+
+
+@app.post("/score/social-media", dependencies=[Depends(verify_key)])
+def trigger_social_media_scoring():
+    """Generate posting recommendations for all platforms."""
+    try:
+        count = score_social_media.main()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"status": "social media recommendations generated", "count_written": count}

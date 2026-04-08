@@ -7,7 +7,7 @@
 
 ## Overview
 
-The ML service exposes three POST endpoints. All require the `X-API-Key` header. The `/health` endpoint requires no auth.
+The ML service exposes five POST endpoints. All require the `X-API-Key` header. The `/health` endpoint requires no auth.
 
 ```
 Base URL (local):       http://localhost:8000
@@ -19,6 +19,8 @@ Base URL (deployed):    https://<your-container-app>.azurecontainerapps.io
 | `POST /score/churn` | Donor Churn | .NET backend | After new donation data is imported |
 | `POST /score/impact` | Impact Attribution | .NET backend | After new allocation data is imported |
 | `POST /score/residents` | Resident Risk | .NET backend | After health/education/incident records are updated |
+| `POST /score/interventions` | Intervention Effectiveness | .NET backend | After process recordings or outcome records are updated |
+| `POST /score/social-media` | Social Media Optimization | .NET backend | After new social media posts are logged |
 | `GET /health` | — | Load balancer / monitoring | Anytime |
 
 ---
@@ -240,6 +242,150 @@ Call after any of the following events:
 
 ---
 
+## POST /score/interventions
+
+### What it does
+
+Generates per-resident intervention recommendations for all active residents. Loads the trained intervention model from Azure Blob Storage, assigns each resident to a profile cluster, and writes one recommendation per resident to the `intervention_recommendations` table in Supabase.
+
+Recommendations include the optimal service mix, session type, session frequency, and social worker — ranked by measured composite outcome improvement within similar resident profiles. Each recommendation includes a `confidence_tier` based on cluster size.
+
+**Access restricted.** The `intervention_recommendations` table is protected by Supabase row-level security — only users with `Admin` or `SocialWorker` roles can read from it.
+
+### Request
+
+```http
+POST /score/interventions
+X-API-Key: <key>
+```
+
+No request body required.
+
+### Response
+
+```json
+{
+  "status": "intervention scoring complete",
+  "count_scored": 58
+}
+```
+
+### What gets written to Supabase
+
+Table: `intervention_recommendations` (RLS restricted)
+
+| Column | Type | Description |
+|---|---|---|
+| `resident_id` | integer | Primary key — references `residents` |
+| `profile_cluster` | text | Label describing the resident's profile group |
+| `recommended_services` | jsonb | Ordered list of service types by predicted composite improvement |
+| `recommended_session_type` | text | `Individual`, `Group`, or `Mixed` |
+| `recommended_sessions_per_month` | integer | Recommended session frequency |
+| `recommended_social_worker` | text | SW code with highest average outcome improvement for this profile |
+| `sw_outcome_score` | float | Average composite outcome improvement for the recommended SW |
+| `predicted_health_improvement` | float | Predicted health score delta (may be null if no training data) |
+| `predicted_education_improvement` | float | Predicted education progress delta (may be null if no training data) |
+| `similar_resident_count` | integer | Number of residents in this profile cluster |
+| `confidence_tier` | text | `high` (≥15 similar), `medium` (5–14), or `low` (<5) |
+| `top_outcome_factors` | jsonb | Up to 3 human-readable reasons driving the recommendation |
+| `scored_at` | timestamptz | When this recommendation was generated |
+| `model_version` | text | Timestamp of the model used |
+
+### Confidence tier thresholds
+
+| Tier | Similar residents in cluster |
+|---|---|
+| `high` | ≥ 15 |
+| `medium` | 5 – 14 |
+| `low` | < 5 |
+
+### When to call
+
+Call after any of the following events:
+- New process recordings are added
+- Health, education, or incident records are updated
+- A resident's case status or risk level changes
+
+---
+
+## POST /score/social-media
+
+### What it does
+
+Generates posting recommendations for all five platforms (Facebook, Instagram, TikTok, WhatsApp, LinkedIn) in both organic and boosted contexts. Loads three trained models from Azure Blob Storage — an engagement model, a donation referrals model, and a donation value model — and writes one recommendation row per platform × boost status combination to the `social_media_recommendations` table.
+
+Each recommendation specifies what to post, when to post it, and in what tone, optimized for donation conversion rather than raw engagement. A `conversion_signal` flag (`converts`, `noise`, or `balanced`) explicitly labels whether a recommended post type drives donations, drives engagement without donations, or both.
+
+### Request
+
+```http
+POST /score/social-media
+X-API-Key: <key>
+```
+
+No request body required.
+
+### Response
+
+```json
+{
+  "status": "social media recommendations generated",
+  "count_written": 10
+}
+```
+
+`count_written` is the number of recommendation rows written (up to 10: 5 platforms × 2 boost states).
+
+### What gets written to Supabase
+
+Table: `social_media_recommendations`
+
+| Column | Type | Description |
+|---|---|---|
+| `recommendation_id` | uuid | Primary key |
+| `platform` | text | `Facebook`, `Instagram`, `TikTok`, `WhatsApp`, or `LinkedIn` |
+| `is_boosted` | boolean | Whether this recommendation applies to paid/boosted posts |
+| `post_type` | text | Recommended post format |
+| `media_type` | text | Recommended media type |
+| `content_topic` | text | Recommended content topic |
+| `sentiment_tone` | text | Recommended tone |
+| `has_call_to_action` | boolean | Whether to include a CTA |
+| `call_to_action_type` | text | Which CTA type (null if no CTA) |
+| `features_resident_story` | boolean | Whether to feature a resident story |
+| `best_day_of_week` | text | Day with highest predicted donation referrals for this platform |
+| `best_hour` | integer | Hour (0–23) with highest predicted donation referrals |
+| `recommended_hashtag_count` | integer | Optimal number of hashtags |
+| `predicted_engagement_rate` | float | Model-predicted engagement rate |
+| `predicted_donation_referrals` | float | Model-predicted donation referrals |
+| `predicted_donation_value_php` | float | Model-predicted donation value (PHP) |
+| `conversion_signal` | text | `converts`, `noise`, or `balanced` |
+| `sample_count` | integer | Historical posts matching this combination |
+| `confidence_tier` | text | `high` (≥30 posts), `medium` (10–29), or `low` (<10) |
+| `generated_at` | timestamptz | When this recommendation was generated |
+| `model_version` | text | Timestamp of the models used |
+
+### Conversion signal labels
+
+| Signal | Meaning |
+|---|---|
+| `converts` | Predicted donation referrals ≥ 1.5× platform median — prioritize this |
+| `noise` | High predicted engagement but referrals below platform median — avoid over-investing |
+| `balanced` | Moderate performance on both signals |
+
+### Confidence tier thresholds
+
+| Tier | Historical posts matching the combination |
+|---|---|
+| `high` | ≥ 30 |
+| `medium` | 10 – 29 |
+| `low` | < 10 |
+
+### When to call
+
+Call after new social media posts are logged. Each run deletes the previous set of recommendations and inserts a fresh one — safe to call repeatedly.
+
+---
+
 ## GET /health
 
 Returns `200 OK` if the service is running. No auth required. Used by Azure load balancer and monitoring.
@@ -259,6 +405,8 @@ Scoring runs can be triggered any time via the API above. Model retraining is ha
 | Donor Churn | Monthly | `train_churn.py` |
 | Impact Attribution | Quarterly (Jan / Apr / Jul / Oct) | `train_impact.py` |
 | Resident Risk | Bi-weekly (1st and 15th) | `train_risk.py` |
+| Intervention Effectiveness | Monthly (1st) | `train_interventions.py` |
+| Social Media Optimization | Monthly (1st) | `train_social_media.py` |
 
 ---
 
